@@ -70,6 +70,45 @@ defmodule Mariaex.Protocol do
 
   def connect(opts) do
     opts         = default_opts(opts)
+
+    {:ok, sock} = do_connect(opts)
+
+    if opts[:aurora_master] do
+      {:ok, sock} = checkout(sock)
+      case get_master_for_aurora(sock) do
+        {:error, error} ->
+          {:ok, sock} = checkin(sock)
+          disconnect(nil, sock)
+          {:error, error}
+        {:ok, master_server} ->
+          {:ok, sock} = checkin(sock)
+          disconnect(nil, sock)
+          do_connect(Keyword.put(opts, :hostname ,master_server))
+      end
+    else
+      {:ok, sock}
+    end
+  end
+
+  def get_master_for_aurora(sock) do
+    statement = "select server_id from information_schema.replica_host_status where session_id = 'MASTER_SESSION_ID' and last_update_timestamp > now() - interval 3 minute order by last_update_timestamp desc limit 1"
+    query = %Query{type: :text, statement: statement}
+    case send_text_query(sock, statement) |> text_query_recv(query, []) do
+      {:error, error, _} ->
+        {:error, error}
+      {:ok, {%Mariaex.Result{rows: rows}, _}, sock} ->
+        if length(rows) < 1 do
+          {:error, %Mariaex.Error{message: "aurora master information not found"}}
+        else
+          [host, domain] = String.split(sock.opts[:hostname], ".", parts: 2)
+          [[master_host]] = rows
+          master_dns = master_host <> "." <> domain
+          {:ok, master_dns}
+        end
+    end
+  end
+
+  def do_connect(opts) do
     sock_type    = opts[:sock_type] |> Atom.to_string |> String.capitalize()
     sock_mod     = Module.concat(Mariaex.Connection, sock_type)
     host         = opts[:hostname] |> parse_host
@@ -123,6 +162,7 @@ defmodule Mariaex.Protocol do
     |> Keyword.put_new(:cache_size, @cache_size)
     |> Keyword.put_new(:sock_type, :tcp)
     |> Keyword.put_new(:socket_options, [])
+    |> Keyword.put_new(:aurora_master, nil)
     |> Keyword.update!(:port, &normalize_port/1)
   end
 
