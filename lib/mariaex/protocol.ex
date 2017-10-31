@@ -100,9 +100,9 @@ defmodule Mariaex.Protocol do
         if length(rows) < 1 do
           {:error, %Mariaex.Error{message: "aurora master information not found"}}
         else
-          [host, domain] = String.split(sock.opts[:hostname], ".", parts: 2)
+          [_host, domain] = String.split(sock.opts[:hostname], ".", parts: 2)
           [[master_host]] = rows
-          master_dns = master_host <> "." <> domain
+          master_dns = master_host <> "." <> String.replace_prefix(domain, "cluster-", "")
           {:ok, master_dns}
         end
     end
