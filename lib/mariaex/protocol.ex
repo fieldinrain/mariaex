@@ -70,6 +70,34 @@ defmodule Mariaex.Protocol do
 
   def connect(opts) do
     opts         = default_opts(opts)
+
+    {:ok, sock} = do_connect(opts)
+    {:ok, sock} = checkout(sock)
+    statement = "SHOW status LIKE 'wsrep_local_state'"
+    query = %Query{type: :text, statement: statement}
+    case send_text_query(sock, statement) |> text_query_recv(query, []) do
+      {:error, error, _} ->
+        {:ok, sock} = checkin(sock)
+        disconnect(nil, sock)
+        {:error, error}
+      {:ok, {%Mariaex.Result{rows: rows}, _}, sock} ->
+        if length(rows) < 1 do
+          # is not PXC
+          checkin(sock)
+        else
+          [[_, status]] = rows
+          if status == "4" do
+            checkin(sock)
+          else
+            {:ok, sock} = checkin(sock)
+            disconnect(nil, sock)
+            {:error, %Mariaex.Error{message: "cluster is not enabled"}}
+          end
+        end
+    end
+  end
+
+  def do_connect(opts) do
     sock_type    = opts[:sock_type] |> Atom.to_string |> String.capitalize()
     sock_mod     = Module.concat(Mariaex.Connection, sock_type)
     host         = opts[:hostname] |> parse_host
